@@ -1,0 +1,27 @@
+* Setup
+  Set up the super-user password first:
+  #+begin_src sh
+    sudo mysqladmin -u root password some-password
+  #+end_src
+
+  Add emacs user account:
+  #+begin_src sql
+    create database emacs_user;
+    grant all on emacs_user.* to emacs@localhost identified by 'emacs';
+    use emacs_user;
+    create table documents (id int not null auto_increment primary key,
+           document varchar(256) not null unique);
+  #+end_src
+
+  Create necessary Sphinx directories and start the daemon:
+  #+begin_src sh
+    mkdir -p ~/.emacs.d/sphinx/var/{log,data}
+    mkdir -p ~/.emacs.d/sphinx/etc
+    indexer -c ~/.emacs.d/sphinx/etc/sphinx.conf --all
+    searchd -c ~/.emacs.d/sphinx/etc/sphinx.conf
+  #+end_src
+  
+  Connect to Sphinx
+  #+begin_src sh
+    mysql -P9306 --protocol=tcp -u emacs -p
+  #+end_src
