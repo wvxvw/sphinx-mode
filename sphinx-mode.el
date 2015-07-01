@@ -32,6 +32,7 @@
 (defvar sphinx-mode-map (make-sparse-keymap))
 (defvar sphinx-query nil)
 (defvar sphinx-rank nil)
+(defvar sphinx-library nil)
 
 (defcustom sphinx-searchd-program "searchd"
   "Sphinx daemon program")
@@ -152,6 +153,16 @@
       (setq pos (match-end 0)))
     (nreverse result)))
 
+(defun sphinx-goto (&optional node)
+  (interactive)
+  (when (overlayp node)
+    (setq node (sphinx-parse-node (button-label node))))
+  (info "(dir)Top")
+  (let ((nodes node))
+    (while nodes
+      (Info-menu (car nodes))
+      (setq nodes (cdr nodes)))))
+
 ;;;###autoload
 (defun sphinx ()
   (interactive)
@@ -213,15 +224,53 @@
 (define-key sphinx-mode-map (kbd "SPC") 'sphinx-goto)
 (define-key sphinx-mode-map (kbd "C-c C-f g") 'sphinx-goto)
 
-(defun sphinx-goto (&optional node)
+(defun sphinx-install-dir ()
+  (or sphinx-library
+      (file-name-directory (locate-library "sphinx-mode"))))
+
+(defun sphinx-install-config ()
+  (with-temp-file
+      (format "%ssphinx.conf" (expand-file-name "./etc/" sphinx-dir))
+    (insert-file-contents
+     (expand-file-name "sphinx.conf" (sphinx-install-dir)))))
+
+(defun sphinx-install-prerequisites ()
+  (let ((dir (format "/sudo::%s" (sphinx-install-dir)))
+        (current default-directory))
+    (cd dir)
+    (condition-case error
+        (progn
+          (shell "sphinx-install")
+          (pop-to-buffer (current-buffer))
+          (goto-char (point-max))
+          (insert "./install.sh")
+          (comint-send-input))
+      ;; Wait until the script finishes
+      (with-local-quit
+        (while (get-buffer-process "sphinx-install")
+          (sleep-for 5)
+          (accept-process-output)))
+      (error
+       (message "Installation failed. 
+You may still try to read %s and perform the required installations manually.")))
+    (cd current)))
+
+(defun sphinx-maybe-initial-index ()
+  )
+
+;;;###autoload
+(defun sphinx-install ()
   (interactive)
-  (when (overlayp node)
-    (setq node (sphinx-parse-node (button-label node))))
-  (info "(dir)Top")
-  (let ((nodes node))
-    (while nodes
-      (Info-menu (car nodes))
-      (setq nodes (cdr nodes)))))
+  (when (or (not (file-exists-p sphinx-dir))
+            (yes-or-no-p "Previous install detected, install anyway? "))
+    (make-directory sphinx-dir t)
+    (cl-loop for sub-dir in '("./var/log/" "./var/data/" "./etc")
+             for expanded = (expand-file-name sub-dir sphinx-dir)
+             unless (file-exists-p expanded) do
+             (make-directory expanded t))
+    (sphinx-install-config)
+    (sphinx-install-prerequisites)
+    (sphinx-maybe-initial-index)))
 
 ;;;###autoload
 (defun sphinx-mode ()
