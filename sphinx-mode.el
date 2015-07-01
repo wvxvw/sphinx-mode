@@ -20,7 +20,7 @@
 ;;; Conventions
 ;;
 
-;;* Eclim Project
+;;* Sphinx Mode
 
 (require 'comint)
 (require 'emacsql)
