@@ -169,8 +169,7 @@
    (list
     (read-string "Ask Sphinx anything: ")
     (let ((arg (prefix-numeric-value current-prefix-arg)))
-      (if (and (called-interactively-p 'any) (> arg 1))
-          (read-string "Rank results by: ") ""))))
+      (if (> arg 1) (read-string "Rank results by: ") ""))))
   (let ((composite-query
          (format "SELECT node, WEIGHT() as rank FROM info 
                   WHERE MATCH('%s') ORDER BY WEIGHT() DESC, id ASC" query)))
