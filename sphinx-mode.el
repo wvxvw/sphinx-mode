@@ -1,9 +1,46 @@
+;; sphinx-mode.el --- an interface to Sphinx, database search indexer.
+;;
+;; Copyright (C) 2015  Oleg Sivokon <olegsivokon@gmail.com>
+;;
+;; This program is free software: you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+;;
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+;;
+;;; Contributors
+;;
+;;; Conventions
+;;
+
+;;* Eclim Project
+
 (require 'comint)
 (require 'emacsql)
 (require 'emacsql-mysql)
 
 (defvar sphinx-mysql-connection nil)
 (defvar sphinx-connection nil)
+(defvar sphinx-mode-hook nil)
+(defvar sphinx-mode-map (make-sparse-keymap))
+(defvar sphinx-query nil)
+(defvar sphinx-rank nil)
+
+(defcustom sphinx-searchd-program "searchd"
+  "Sphinx daemon program")
+
+(defcustom sphinx-indxer-program "indexer"
+  "Sphinx indexer program")
+
+(defcustom sphinx-dir "~/.emacs.d/sphinx/"
+  "Directory where Sphinx settings and indices will be stored")
 
 (cl-defmacro with-sphinx-info-tfile ((tmp-file command) &body body)
   (let ((tmp-file tmp-file))
@@ -107,6 +144,15 @@
   (sphinx-info-ensure-table)
   (mapc 'sphinx-info-build-node-index (sphinx-info-nodes)))
 
+(defun sphinx-parse-node (raw)
+  (let ((pos 0) result)
+    (while (string-match "'\\([^']+\\)'" raw pos)
+      (push (substring raw (match-beginning 1) (match-end 1))
+            result)
+      (setq pos (match-end 0)))
+    (nreverse result)))
+
+;;;###autoload
 (defun sphinx ()
   (interactive)
   (make-comint "Sphinx" sql-mysql-program nil
@@ -117,6 +163,7 @@
                "--password=emacs" "emacs_user")
   (pop-to-buffer (get-buffer "*Sphinx*")))
 
+;;;###autoload
 (defun sphinx-info-apropos (query &optional ranker)
   (interactive
    (list
@@ -132,13 +179,66 @@
               (format "%s;" composite-query)
             (format "%s OPTION ranker = expr('%s');" composite-query ranker)))
     (unless sphinx-connection (sphinx-connect))
+
     (let ((buffer "*sphinx-apropos*")
-          (results (emacsql sphinx-connection composite-query)))
+          (results
+           (condition-case error
+               (emacsql sphinx-connection composite-query)
+             ;; "MySQL server has gone away"
+             (emacsql-error
+              (when (string-equal (cl-second error)
+                                  "MySQL server has gone away")
+                (sphinx-connect)
+                (emacsql sphinx-connection composite-query))))))
       (with-current-buffer (get-buffer-create buffer)
-        (erase-buffer)
-        (insert (replace-regexp-in-string "^\\s-*" "> " composite-query))
-        (insert "\n\n")
-        (cl-loop for (node rank) in results do
-                 (insert (format "%d. %s\n" rank node)))
-        (pop-to-buffer buffer)))))
-      
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (format "-*- mode: sphinx; sphinx-query: %S; sphinx-rank: %S -*-\n\n"
+                          query ranker))
+          (insert "SQL:\n")
+          (insert (replace-regexp-in-string "^\\s-*" "> " composite-query))
+          (insert "\n\n")
+          (put-text-property (point-min) (point) 'face 'font-lock-comment-face)
+          (cl-loop for (node rank) in results do
+                   (let ((beg (point)))
+                     (insert (format "%d. " rank))
+                     (put-text-property beg (point) 'face 'default)
+                     (insert-button node
+                                    'action 'sphinx-goto
+                                    'help-echo "Open Info browser")
+                     (insert "\n")))
+          (sphinx-mode)
+          (pop-to-buffer buffer))))))
+
+(define-key sphinx-mode-map (kbd "RET") 'sphinx-goto)
+(define-key sphinx-mode-map (kbd "SPC") 'sphinx-goto)
+(define-key sphinx-mode-map (kbd "C-c C-f g") 'sphinx-goto)
+
+(defun sphinx-goto (&optional node)
+  (interactive)
+  (when (overlayp node)
+    (setq node (sphinx-parse-node (button-label node))))
+  (info "(dir)Top")
+  (let ((nodes node))
+    (while nodes
+      (Info-menu (car nodes))
+      (setq nodes (cdr nodes)))))
+
+;;;###autoload
+(defun sphinx-mode ()
+  "Displays Sphinx search results.
+
+\\{sphinx-mode-map}"
+  (interactive)
+  (kill-all-local-variables)
+  (buffer-disable-undo)
+  (setq major-mode 'sphinx-mode
+        mode-name "sphinx"
+        mode-line-process ""
+        buffer-read-only t)
+  (hl-line-mode t)
+  (use-local-map sphinx-mode-map)
+  (beginning-of-buffer)
+  (run-mode-hooks 'sphinx-mode-hook))
+
+(provide 'sphinx-mode)

@@ -17,7 +17,7 @@
   #+begin_src sh
     mkdir -p ~/.emacs.d/sphinx/var/{log,data}
     mkdir -p ~/.emacs.d/sphinx/etc
-    indexer -c ~/.emacs.d/sphinx/etc/sphinx.conf --all
+    indexer -c ~/.emacs.d/sphinx/etc/sphinx.conf --all --rotate
     searchd -c ~/.emacs.d/sphinx/etc/sphinx.conf
   #+end_src
   
