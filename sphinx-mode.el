@@ -143,6 +143,29 @@
             ADD CONSTRAINT contents UNIQUE IF NOT EXISTS
             (contents(100));"))
 
+(defun sphinx-org-ensure-table ()
+  (emacsql sphinx-mysql-connection
+           [:create-table :if :not :exists org_kinds
+                          ([(id integer :primary-key :auto_increment)
+                            (kind string)])])
+  (emacsql sphinx-mysql-connection
+           [:create-table :if :not :exists org
+                          ([(id integer :primary-key :auto_increment)
+                            (file object :not :null)
+                            (kind integer :not :null)
+                            (pos integer :not :null)
+                            (contents string)])])
+  ;; TODO: I couldn't find a way to specify unique constraint inline
+  ;; There are multiple issues here, the if not exists causes MySQL
+  ;; connection to close, these should be both inified with the table
+  ;; definition.
+  (emacsql sphinx-mysql-connection
+           "ALTER TABLE org
+            ADD FOREIGN KEY (kind) REFERENCES org_kinds(id);")
+  (emacsql sphinx-mysql-connection
+           "ALTER TABLE org
+            ADD FOREIGN KEY (parent) REFERENCES org(id);"))
+
 (defun sphinx-info-build-node-index (root)
   (with-sphinx-info-tfile
    ;; TODO: This is very ineffective way of doing this, there must be a
@@ -226,7 +249,7 @@ You may still try to read %s and perform the required installations manually."))
   (condition-case error
       (emacsql sphinx-mysql-connection
                [:insert :into documents
-                        (document) :values ($s1)]
+                        (document) :values [$s1]]
                file)
     (emacsql-error
      (message "Couldn't index because: %s" error))))
@@ -246,24 +269,16 @@ You may still try to read %s and perform the required installations manually."))
           (begin (plist-get options :begin))
           (cnt (if (and contents (stringp (car contents)))
                    (car contents)
-                 (or (plist-get options :title)
+                 (or (car (plist-get options :title))
                      (plist-get options :value)))))
-      (cl-case kind
-        ;; I think these can't have nested elements
-        ((babel-call center-block comment comment-block example-block export-block
-                     footnote-definition item keyword latex-environment
-                     node-property quote-block src-block table-row verse-block)
-         ;; (emacsql sphinx-mysql-connection
-         ;;          [:insert :into org (kind file pos parent contents)
-         ;;                   :values ([:select kind :from org_kinds :where (= kind $s1)]
-         ;;                            $s2 $s3 $s4
-         ;;                            [:select id :from org :as org1
-         ;;                                     :where (= org1.file $s2)])]
-         ;;          kind file begin contents)
-         )
-        ;; I think these can have child nodes
-        ((drawer headline paragraph plain-list property-drawer table)
-         )))))
+      (when cnt (setq cnt (substring-no-properties cnt 0 (length cnt))))
+      (emacsql sphinx-mysql-connection
+               "INSERT INTO org (kind, file, pos, contents, parent)
+                VALUES
+                ((SELECT id FROM org_kinds WHERE org_kinds.kind = $s1),
+                 $s2, $s3, $s4,
+                 (SELECT id FROM org AS org1 WHERE org1.file = $s2 LIMIT 1))"
+                  kind file begin cnt))))
 
 (defun sphinx-org-index-file (file)
   (with-current-buffer (find-file-noselect file)
@@ -280,7 +295,9 @@ You may still try to read %s and perform the required installations manually."))
 (defun sphinx-dired-do-index (&optional arg)
   "Tell Sphinx to index the marked file(s)."
   (interactive "P")
-    (mapc 'sphinx-index-file (dired-get-marked-files nil nil)))
+  (unless sphinx-mysql-connection
+    (sphinx-mysql-connect))
+  (mapc 'sphinx-index-file (dired-get-marked-files nil nil)))
 
 (define-key dired-mode-map (kbd "J") 'sphinx-dired-do-index)
 
