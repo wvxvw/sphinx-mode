@@ -33,6 +33,8 @@
 (defvar sphinx-query nil)
 (defvar sphinx-rank nil)
 (defvar sphinx-library nil)
+(defvar sphinx-index-alist
+  '(("\\.org$" . sphinx-org-index-file)))
 
 (defcustom sphinx-searchd-program "searchd"
   "Sphinx daemon program")
@@ -93,20 +95,26 @@
     (emacsql-close sphinx-connection)
     (clrhash emacsql-prepare-cache)
     (setq sphinx-connection nil))
+  (sphinx-ensure-searchd)
   (let* ((database "emacs_user")
          (mysql (executable-find emacsql-mysql-executable))
          (command (list "--port=9306" "--protocol=tcp" "--user=emacs" "--password=emacs"
                         database "--skip-pager" "-rfBNL" mysql)))
     (let* ((process-connection-type t)
-           (buffer (generate-new-buffer " *emacsql-mysql*"))
+           (buffer (generate-new-buffer " *emacsql-sphinx*"))
            (command (mapconcat #'shell-quote-argument (nreverse command) " "))
            (process (start-process-shell-command
-                     "emacsql-mysql" buffer (concat "stty raw &&" command)))
+                     "emacsql-sphinx" buffer (concat "stty raw &&" command)))
            (connection (make-instance 'emacsql-mysql-connection
                                       :process process
                                       :dbname database)))
       (setf (process-sentinel process)
-            (lambda (proc _) (kill-buffer (process-buffer proc))))
+            ;; TODO: This needs to notify the authorities, when
+            ;; things go South.
+            (with-current-buffer (process-buffer proc)
+                (message (buffer-substring (point-min) (point-max))))
+            (lambda (proc _)
+              (kill-buffer (process-buffer proc))))
       (setq sphinx-connection (emacsql-register connection)))))
 
 (defun sphinx-disconnect ()
@@ -114,6 +122,14 @@
   (when sphinx-connection
     (emacsql-close sphinx-connection)
     (setq sphinx-connection nil)))
+
+(defun sphinx-ensure-searchd ()
+  (let ((present (shell-command-to-string "pgrep searchd")))
+    (when (string-equal present "")
+      (start-process-shell-command
+       "searchd" (generate-new-buffer " *searchd*")
+       (format "%s -c %s" (executable-find sphinx-searchd-program)
+               (expand-file-name "./etc/sphinx.conf" sphinx-dir))))))
 
 (defun sphinx-info-ensure-table ()
   (emacsql sphinx-mysql-connection
@@ -129,6 +145,8 @@
 
 (defun sphinx-info-build-node-index (root)
   (with-sphinx-info-tfile
+   ;; TODO: This is very ineffective way of doing this, there must be a
+   ;; way to collect info's output without doing I/O.
    (tmp (format "info %s -o '%s'" root tmp))
    (when (sphinx-add-info-row root)
      (forward-line 2)
@@ -162,6 +180,142 @@
     (while nodes
       (Info-menu (car nodes))
       (setq nodes (cdr nodes)))))
+
+(define-key sphinx-mode-map (kbd "RET") 'sphinx-goto)
+(define-key sphinx-mode-map (kbd "SPC") 'sphinx-goto)
+(define-key sphinx-mode-map (kbd "C-c C-f g") 'sphinx-goto)
+
+(defun sphinx-install-dir ()
+  (or sphinx-library
+      (file-name-directory (locate-library "sphinx-mode"))))
+
+(defun sphinx-install-config ()
+  (with-temp-file
+      (expand-file-name "./etc/sphinx.conf" sphinx-dir)
+    (insert-file-contents
+     (expand-file-name "sphinx.conf" (sphinx-install-dir)))))
+
+(defun sphinx-install-prerequisites ()
+  (let ((dir (format "/sudo::%s" (sphinx-install-dir)))
+        (current default-directory))
+    (cd dir)
+    (condition-case error
+        (progn
+          (shell "sphinx-install")
+          (pop-to-buffer (current-buffer))
+          (goto-char (point-max))
+          (insert "./install.sh")
+          (comint-send-input))
+      ;; TODO: There has to be another way to do it.
+      ;; Wait until the script finishes
+      (with-local-quit
+        (while (get-buffer-process "sphinx-install")
+          (sleep-for 5)
+          (accept-process-output)))
+      (error
+       (message "Installation failed. 
+You may still try to read %s and perform the required installations manually.")))
+    (cd current)))
+
+(defun sphinx-maybe-initial-index ()
+  )
+
+(defun sphinx-add-file-default (file)
+  (unless sphinx-mysql-connection
+    (sphinx-mysql-connect))
+  (condition-case error
+      (emacsql sphinx-mysql-connection
+               [:insert :into documents
+                        (document) :values ($s1)]
+               file)
+    (emacsql-error
+     (message "Couldn't index because: %s" error))))
+
+(defun sphinx-index-file (file)
+  (interactive "fIndex file: ")
+  (funcall
+   (cl-loop for (re . func) in sphinx-index-alist
+            when (string-match-p re file) do
+            (cl-return func)
+            finally (cl-return 'sphinx-add-file-default))
+   file))
+
+(defun sphinx-org-add-row (record)
+  (cl-destructuring-bind (kind options &rest contents) record
+    (let ((file (buffer-file-name))
+          (begin (plist-get options :begin))
+          (cnt (if (and contents (stringp (car contents)))
+                   (car contents)
+                 (or (plist-get options :title)
+                     (plist-get options :value)))))
+      (cl-case kind
+        ;; I think these can't have nested elements
+        ((babel-call center-block comment comment-block example-block export-block
+                     footnote-definition item keyword latex-environment
+                     node-property quote-block src-block table-row verse-block)
+         ;; (emacsql sphinx-mysql-connection
+         ;;          [:insert :into org (kind file pos parent contents)
+         ;;                   :values ([:select kind :from org_kinds :where (= kind $s1)]
+         ;;                            $s2 $s3 $s4
+         ;;                            [:select id :from org :as org1
+         ;;                                     :where (= org1.file $s2)])]
+         ;;          kind file begin contents)
+         )
+        ;; I think these can have child nodes
+        ((drawer headline paragraph plain-list property-drawer table)
+         )))))
+
+(defun sphinx-org-index-file (file)
+  (with-current-buffer (find-file-noselect file)
+    (org-element-map (org-element-parse-buffer)
+        org-element-all-elements 'sphinx-org-add-row)))
+
+;; Dired integration
+(defcustom sphinx-keep-marker-index ?i
+  "Controls marking of indexed files."
+  :type '(choice (const :tag "Keep" t)
+                 (character :tag "Mark"))
+  :group 'dired-mark)
+
+(defun sphinx-dired-do-index (&optional arg)
+  "Tell Sphinx to index the marked file(s)."
+  (interactive "P")
+    (mapc 'sphinx-index-file (dired-get-marked-files nil nil)))
+
+(define-key dired-mode-map (kbd "J") 'sphinx-dired-do-index)
+
+;; Autoloads
+
+;;;###autoload
+(defun sphinx-install ()
+  (interactive)
+  (when (or (not (file-exists-p sphinx-dir))
+            (yes-or-no-p "Previous install detected, install anyway? "))
+    (make-directory sphinx-dir t)
+    (cl-loop for sub-dir in '("./var/log/" "./var/data/" "./etc")
+             for expanded = (expand-file-name sub-dir sphinx-dir)
+             unless (file-exists-p expanded) do
+             (make-directory expanded t))
+    (sphinx-install-config)
+    (sphinx-install-prerequisites)
+    (sphinx-maybe-initial-index)))
+
+;;;###autoload
+(defun sphinx-mode ()
+  "Displays Sphinx search results.
+
+\\{sphinx-mode-map}"
+  (interactive)
+  (kill-all-local-variables)
+  (buffer-disable-undo)
+  (setq major-mode 'sphinx-mode
+        mode-name "sphinx"
+        mode-line-process ""
+        buffer-read-only t)
+  (hl-line-mode t)
+  (use-local-map sphinx-mode-map)
+  (beginning-of-buffer)
+  (run-mode-hooks 'sphinx-mode-hook))
 
 ;;;###autoload
 (defun sphinx ()
@@ -219,74 +373,5 @@
                      (insert "\n")))
           (sphinx-mode)
           (pop-to-buffer buffer))))))
-
-(define-key sphinx-mode-map (kbd "RET") 'sphinx-goto)
-(define-key sphinx-mode-map (kbd "SPC") 'sphinx-goto)
-(define-key sphinx-mode-map (kbd "C-c C-f g") 'sphinx-goto)
-
-(defun sphinx-install-dir ()
-  (or sphinx-library
-      (file-name-directory (locate-library "sphinx-mode"))))
-
-(defun sphinx-install-config ()
-  (with-temp-file
-      (format "%ssphinx.conf" (expand-file-name "./etc/" sphinx-dir))
-    (insert-file-contents
-     (expand-file-name "sphinx.conf" (sphinx-install-dir)))))
-
-(defun sphinx-install-prerequisites ()
-  (let ((dir (format "/sudo::%s" (sphinx-install-dir)))
-        (current default-directory))
-    (cd dir)
-    (condition-case error
-        (progn
-          (shell "sphinx-install")
-          (pop-to-buffer (current-buffer))
-          (goto-char (point-max))
-          (insert "./install.sh")
-          (comint-send-input))
-      ;; Wait until the script finishes
-      (with-local-quit
-        (while (get-buffer-process "sphinx-install")
-          (sleep-for 5)
-          (accept-process-output)))
-      (error
-       (message "Installation failed. 
-You may still try to read %s and perform the required installations manually.")))
-    (cd current)))
-
-(defun sphinx-maybe-initial-index ()
-  )
-
-;;;###autoload
-(defun sphinx-install ()
-  (interactive)
-  (when (or (not (file-exists-p sphinx-dir))
-            (yes-or-no-p "Previous install detected, install anyway? "))
-    (make-directory sphinx-dir t)
-    (cl-loop for sub-dir in '("./var/log/" "./var/data/" "./etc")
-             for expanded = (expand-file-name sub-dir sphinx-dir)
-             unless (file-exists-p expanded) do
-             (make-directory expanded t))
-    (sphinx-install-config)
-    (sphinx-install-prerequisites)
-    (sphinx-maybe-initial-index)))
-
-;;;###autoload
-(defun sphinx-mode ()
-  "Displays Sphinx search results.
-
-\\{sphinx-mode-map}"
-  (interactive)
-  (kill-all-local-variables)
-  (buffer-disable-undo)
-  (setq major-mode 'sphinx-mode
-        mode-name "sphinx"
-        mode-line-process ""
-        buffer-read-only t)
-  (hl-line-mode t)
-  (use-local-map sphinx-mode-map)
-  (beginning-of-buffer)
-  (run-mode-hooks 'sphinx-mode-hook))
 
 (provide 'sphinx-mode)
