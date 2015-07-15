@@ -25,6 +25,7 @@
 (require 'comint)
 (require 'emacsql)
 (require 'emacsql-mysql)
+(require 'emacsql-mysql)
 
 (defvar sphinx-mysql-connection nil)
 (defvar sphinx-connection nil)
@@ -109,12 +110,12 @@
                                       :process process
                                       :dbname database)))
       (setf (process-sentinel process)
-            ;; TODO: This needs to notify the authorities, when
-            ;; things go South.
-            (with-current-buffer (process-buffer proc)
+            (lambda (process _)
+              ;; TODO: This needs to notify the authorities, when
+              ;; things go South.
+              (with-current-buffer (process-buffer process)
                 (message (buffer-substring (point-min) (point-max))))
-            (lambda (proc _)
-              (kill-buffer (process-buffer proc))))
+              (kill-buffer (process-buffer process))))
       (setq sphinx-connection (emacsql-register connection)))))
 
 (defun sphinx-disconnect ()
