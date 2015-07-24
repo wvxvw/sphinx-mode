@@ -1,3 +1,3 @@
 (defpackage :sphinx-mode-cl
   (:use :cl :iterate)
-  (:export))
+  (:export :start :start-interactive))

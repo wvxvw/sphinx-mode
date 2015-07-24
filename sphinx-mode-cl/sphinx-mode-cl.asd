@@ -7,8 +7,11 @@
   :author ("Oleg Sivokon <olegsivokon@gmail.com>"
            "Jack Zhang")
   :license "MIT"
-  :depends-on (:alexandria :iterate :split-sequence :cl-containers :clsql :cl-sphinx-search)
+  :depends-on (:alexandria :iterate :split-sequence :cl-containers :log4cl
+                           :clsql :cl-sphinx-search :unix-opts :external-program)
   :serial t
   :components ((:file "package")
-               (:file "db"))
+               (:file "db")
+               (:file "syscalls")
+               (:file "main"))
   :description "Common Lisp part of Emacs sphinx-mode.")

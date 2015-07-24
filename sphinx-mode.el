@@ -25,7 +25,6 @@
 (require 'comint)
 (require 'emacsql)
 (require 'emacsql-mysql)
-(require 'emacsql-mysql)
 
 (defvar sphinx-mysql-connection nil)
 (defvar sphinx-connection nil)
