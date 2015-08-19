@@ -4,12 +4,14 @@
            "Jack Zhang")
   :license "MIT"
   :depends-on ("alexandria" "iterate" "split-sequence" "cl-containers" "log4cl"
-                            "clsql" "cl-sphinx-search" "unix-opts" "external-program")
+                            "clsql" "cl-sphinx-search" "unix-opts" "external-program"
+                            "quicklisp" "swank")
   :entry-point "sphinx-mode-cl:start"
   :build-operation program-op
   :serial t
   :components ((:file "package")
                (:file "db")
                (:file "syscalls")
-               (:file "main"))
+               (:file "main")
+               (:file "server"))
   :description "Common Lisp part of Emacs sphinx-mode.")

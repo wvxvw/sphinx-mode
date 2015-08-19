@@ -76,11 +76,27 @@
     (log:debug "configuration: ~a" (getf options :configuration))
     (log:debug "free args: ~{~a~^, ~}" free-args)))
 
+(defun start-swank (&key (port 4055)
+                      (swank-loader (merge-pathnames
+                                     #p"./swank-loader.lisp"
+                                     (ql:where-is-system "swank"))))
+  (load swank-loader)
+  (setf swank:*configure-emacs-indentation* nil)
+  (funcall (read-from-string "swank-loader:init")
+                               :delete nil
+                               :reload nil
+                               :load-contribs nil)
+  (swank:create-server :port port :style :spawn :dont-close t))
+
+(defun pong () (values "Sending pong"))
+
 ;; sbcl --load ./sphinx-mode-cl.lisp -v 5 -c ~/.emacs.d/sphinx/ -s $(which searchd)
 (defun start ()
   (init)
   (read-arguments)
-  (ensure-searchd-started))
+  (ensure-searchd-started)
+  (start-swank)
+  (loop (sleep 1000)))
 
 (defun start-interactive (searchd configuration &optional (verbosity 0))
   (setf *searchd* searchd
